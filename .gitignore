@@ -26,3 +26,8 @@ run
 forge*changelog.txt
 *.bat
 /.pi*
+
+
+/*.tar.gz
+/*.zip
+docs
