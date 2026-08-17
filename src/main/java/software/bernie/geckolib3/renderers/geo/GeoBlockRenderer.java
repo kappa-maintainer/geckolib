@@ -56,7 +56,11 @@ public abstract class GeoBlockRenderer<T extends TileEntity & IAnimatable> exten
 		int ly = light / 65536;
 
 		GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
-		OpenGlHelper.setLightmapTextureCoords(GL11.GL_TEXTURE_2D, lx, ly);
+		// NOTE: the target must be the lightmap texture unit (GL_TEXTURE1 = 33985), not
+		// GL_TEXTURE_2D — glMultiTexCoord treats the first argument as a texture unit
+		// enum, so passing 3553 makes the call a no-op (GL_INVALID_ENUM) and the
+		// lightmap coords stay at their previous value, freezing the model's brightness
+		OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, lx, ly);
 		GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
 
 		GlStateManager.pushMatrix();

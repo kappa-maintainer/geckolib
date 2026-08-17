@@ -15,6 +15,7 @@ import org.lwjgl.opengl.GL11;
 
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.util.ResourceLocation;
@@ -39,85 +40,94 @@ public interface IGeoRenderer<T> {
 
 		renderLate(animatable, partialTicks, red, green, blue, alpha);
 
-		// Textures with an alpha channel are cutout-rendered: alpha-tested (transparent
-		// pixels don't write depth) while opaque pixels keep writing depth, so the model
-		// still occludes things behind it correctly
+		// Alpha-channel textures are cutout-rendered: alpha-tested so transparent pixels don't write depth
 		boolean textureHasAlpha = TextureAlphaDetector.hasAlpha(getTextureLocation(animatable));
-		if (textureHasAlpha) {
-			GlStateManager.enableAlpha();
-			GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-		}
-		BufferBuilder builder = Tessellator.getInstance().getBuffer();
 
-		// Single traversal: opaque bones are submitted immediately, transparent bones are deferred
-		List<TransparentBone> transparentBones = null;
-		GlStateManager.depthMask(true);
-		builder.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_COLOR_NORMAL);
-		for (GeoBone group : model.topLevelBones) {
-			transparentBones = renderRecursively(builder, group, red, green, blue, alpha, transparentBones);
+		// Optional per-renderer lighting overrides (see isUnlit/isEmissive)
+		boolean unlit = isUnlit();
+		boolean emissive = isEmissive();
+		boolean prevLighting = unlit && GL11.glIsEnabled(GL11.GL_LIGHTING);
+		if (unlit) {
+			GlStateManager.disableLighting();
 		}
-		Tessellator.getInstance().draw();
+		if (emissive) {
+			GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+			GlStateManager.disableTexture2D();
+			GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+		}
 
-		// Pass 2: submit deferred transparent bones without depth writing so they don't occlude.
-		// Bones are sorted far-to-near by camera distance in model space for correct blending.
-		if (transparentBones != null) {
-			GlStateManager.enableBlend();
-			GlStateManager.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
-			Vector4f cameraLocal = getCameraLocalPosition();
-			for (TransparentBone transparentBone : transparentBones) {
-				float dx = transparentBone.boneX - cameraLocal.x;
-				float dy = transparentBone.boneY - cameraLocal.y;
-				float dz = transparentBone.boneZ - cameraLocal.z;
-				transparentBone.distanceSq = dx * dx + dy * dy + dz * dz;
+		try {
+			if (textureHasAlpha) {
+				GlStateManager.enableAlpha();
+				GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
 			}
-			transparentBones.sort((a, b) -> Float.compare(b.distanceSq, a.distanceSq));
+			BufferBuilder builder = Tessellator.getInstance().getBuffer();
 
-			GlStateManager.depthMask(false);
+			// Single traversal: opaque bones are submitted immediately, transparent bones are deferred
+			List<TransparentBone> transparentBones = null;
+			GlStateManager.depthMask(true);
 			builder.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_COLOR_NORMAL);
-			for (TransparentBone transparentBone : transparentBones) {
-				submitTransparentBone(builder, transparentBone, red, green, blue);
+			for (GeoBone group : model.topLevelBones) {
+				transparentBones = renderRecursively(builder, group, red, green, blue, alpha, transparentBones);
 			}
 			Tessellator.getInstance().draw();
-			GlStateManager.depthMask(true);
-			GlStateManager.disableBlend();
+
+			// Pass 2: deferred transparent bones, no depth write, sorted far-to-near
+			if (transparentBones != null) {
+				GlStateManager.enableBlend();
+				GlStateManager.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA,
+						GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
+				Vector4f cameraLocal = getCameraLocalPosition();
+				for (TransparentBone transparentBone : transparentBones) {
+					float dx = transparentBone.boneX - cameraLocal.x;
+					float dy = transparentBone.boneY - cameraLocal.y;
+					float dz = transparentBone.boneZ - cameraLocal.z;
+					transparentBone.distanceSq = dx * dx + dy * dy + dz * dz;
+				}
+				transparentBones.sort((a, b) -> Float.compare(b.distanceSq, a.distanceSq));
+
+				GlStateManager.depthMask(false);
+				builder.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_COLOR_NORMAL);
+				for (TransparentBone transparentBone : transparentBones) {
+					submitTransparentBone(builder, transparentBone, red, green, blue);
+				}
+				Tessellator.getInstance().draw();
+				GlStateManager.depthMask(true);
+				GlStateManager.disableBlend();
+			}
+
+			if (textureHasAlpha) {
+				GlStateManager.disableAlpha();
+			}
+		} finally {
+			if (unlit && prevLighting) {
+				GlStateManager.enableLighting();
+			}
+			if (emissive) {
+				GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+				GlStateManager.enableTexture2D();
+				GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+			}
 		}
 
-		if (textureHasAlpha) {
-			GlStateManager.disableAlpha();
-		}
 		renderAfter(animatable, partialTicks, red, green, blue, alpha);
 		GlStateManager.disableRescaleNormal();
 	}
 
-	/**
-	 * Renders a bone subtree immediately, including transparent bones. Only intended
-	 * for external/manual invocation; the standard render pipeline uses the
-	 * collector overload.
-	 */
+	/** Renders a bone subtree immediately (manual invocation only). */
 	default void renderRecursively(BufferBuilder builder, GeoBone bone, float red, float green, float blue,
 			float alpha) {
 		renderRecursively(builder, bone, red, green, blue, alpha, null);
 	}
 
-	/**
-	 * @deprecated Superseded by the single-traversal render pipeline. The
-	 *             {@code opaquePass} argument is ignored; the bone subtree is
-	 *             submitted immediately with the given alpha.
-	 */
+	/** @deprecated Superseded; opaquePass is ignored, subtree submitted immediately. */
 	@Deprecated
 	default void renderRecursively(BufferBuilder builder, GeoBone bone, float red, float green, float blue,
 			float alpha, boolean opaquePass) {
 		renderRecursively(builder, bone, red, green, blue, alpha, null);
 	}
 
-	/**
-	 * Traverses the bone tree once. Opaque bones (alpha == 1) are submitted to the
-	 * builder immediately; transparent bones (alpha &lt; 1) are collected with a
-	 * matrix snapshot for deferred submission (see {@link #submitTransparentBone}).
-	 *
-	 * @param transparentBones the collector list, or {@code null} to submit everything immediately
-	 * @return the (possibly newly created) collector list
-	 */
+	/** Single traversal: submits opaque bones, collects transparent ones (matrix snapshot) for deferred pass. */
 	default List<TransparentBone> renderRecursively(BufferBuilder builder, GeoBone bone, float red, float green,
 			float blue, float alpha, @Nullable List<TransparentBone> transparentBones) {
 		float boneAlpha = alpha * bone.getAlpha();
@@ -127,8 +137,7 @@ public interface IGeoRenderer<T> {
 
 		MATRIX_STACK.push();
 
-		// Snapshot the parent-chain matrices before applying this bone's own transform,
-		// so deferred submission re-applies the transform uniformly (see submitBoneTree)
+		// Snapshot parent-chain matrices so deferred submission re-applies the bone transform
 		Matrix4f parentModel = boneAlpha < 1 ? new Matrix4f(MATRIX_STACK.getModelMatrix()) : null;
 		Matrix3f parentNormal = boneAlpha < 1 ? new Matrix3f(MATRIX_STACK.getNormalMatrix()) : null;
 
@@ -171,11 +180,7 @@ public interface IGeoRenderer<T> {
 		return transparentBones;
 	}
 
-	/**
-	 * Computes the camera position in model space by inverting the current
-	 * GL_MODELVIEW matrix (which maps model space to camera space) and
-	 * transforming the camera origin (0,0,0).
-	 */
+	/** Camera position in model space, from the inverted GL_MODELVIEW matrix. */
 	private Vector4f getCameraLocalPosition() {
 		FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
 		GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, buffer);
@@ -193,10 +198,7 @@ public interface IGeoRenderer<T> {
 		return cameraLocal;
 	}
 
-	/**
-	 * Submits a deferred transparent bone: restores its matrix snapshot and draws
-	 * its entire subtree with the accumulated alpha.
-	 */
+	/** Restores a deferred bone's matrix snapshot and submits its subtree. */
 	private void submitTransparentBone(BufferBuilder builder, TransparentBone entry, float red, float green,
 			float blue) {
 		MATRIX_STACK.push();
@@ -239,10 +241,7 @@ public interface IGeoRenderer<T> {
 		MATRIX_STACK.pop();
 	}
 
-	/**
-	 * A deferred transparent bone: bone reference, matrix snapshot at collection
-	 * time, and the parent alpha to multiply down the subtree.
-	 */
+	/** Deferred transparent bone: bone, matrix snapshot, parent alpha, pivot position. */
 	final class TransparentBone {
 		final GeoBone bone;
 		final Matrix4f model;
@@ -275,9 +274,7 @@ public interface IGeoRenderer<T> {
 
 			MATRIX_STACK.getNormalMatrix().transform(normal);
 
-			/*
-			 * Fix shading dark shading for flat cubes + compatibility wish Optifine shaders
-			 */
+			// Fix flat-cube dark shading + Optifine shader compatibility
 			if ((cube.size.y == 0 || cube.size.z == 0) && normal.getX() < 0) {
 				normal.x *= -1;
 			}
@@ -304,6 +301,16 @@ public interface IGeoRenderer<T> {
 	GeoModelProvider getGeoModelProvider();
 
 	ResourceLocation getTextureLocation(T instance);
+
+	/** Whether to render without directional lighting (lightmap still applied). NOTE: no effect under shader mods (OptiFine). */
+	default boolean isUnlit() {
+		return false;
+	}
+
+	/** Whether to render fully bright (lightmap disabled); combine with isUnlit for fully unlit rendering. */
+	default boolean isEmissive() {
+		return false;
+	}
 
 	default void renderEarly(T animatable, float ticks, float red, float green, float blue, float partialTicks) {
 	}
