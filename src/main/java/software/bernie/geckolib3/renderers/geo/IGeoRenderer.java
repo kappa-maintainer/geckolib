@@ -1,6 +1,5 @@
 package software.bernie.geckolib3.renderers.geo;
 
-import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -10,8 +9,7 @@ import javax.vecmath.Matrix4f;
 import javax.vecmath.Vector3f;
 import javax.vecmath.Vector4f;
 
-import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL11C;
 
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
@@ -27,6 +25,7 @@ import software.bernie.geckolib3.geo.render.built.GeoQuad;
 import software.bernie.geckolib3.geo.render.built.GeoVertex;
 import software.bernie.geckolib3.model.provider.GeoModelProvider;
 import software.bernie.geckolib3.util.MatrixStack;
+import software.bernie.geckolib3.util.LegacyGL;
 import software.bernie.geckolib3.util.TextureAlphaDetector;
 
 public interface IGeoRenderer<T> {
@@ -37,9 +36,6 @@ public interface IGeoRenderer<T> {
 	Vector3f TEMP_NORMAL = new Vector3f();
 	Vector4f TEMP_VERTEX = new Vector4f();
 	Vector3f TEMP_BONE_POS = new Vector3f();
-	FloatBuffer CAMERA_BUFFER = BufferUtils.createFloatBuffer(16);
-	float[] CAMERA_GL_MATRIX = new float[16];
-	Matrix4f CAMERA_MODELVIEW = new Matrix4f();
 	Vector4f CAMERA_POSITION = new Vector4f();
 
 	default void render(GeoModel model, T animatable, float partialTicks, float red, float green, float blue,
@@ -56,7 +52,7 @@ public interface IGeoRenderer<T> {
 		// Optional per-renderer lighting overrides (see isUnlit/isEmissive)
 		boolean unlit = isUnlit();
 		boolean emissive = isEmissive();
-		boolean prevLighting = unlit && GL11.glIsEnabled(GL11.GL_LIGHTING);
+		boolean prevLighting = unlit && GL11C.glIsEnabled(LegacyGL.GL_LIGHTING);
 		if (unlit) {
 			GlStateManager.disableLighting();
 		}
@@ -69,14 +65,14 @@ public interface IGeoRenderer<T> {
 		try {
 			if (textureHasAlpha) {
 				GlStateManager.enableAlpha();
-				GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+				GlStateManager.alphaFunc(GL11C.GL_GREATER, 0.1F);
 			}
 			BufferBuilder builder = Tessellator.getInstance().getBuffer();
 
 			// Single traversal: opaque bones are submitted immediately, transparent bones are deferred
 			List<TransparentBone> transparentBones = null;
 			GlStateManager.depthMask(true);
-			builder.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_COLOR_NORMAL);
+			builder.begin(GL11C.GL_QUADS, DefaultVertexFormats.POSITION_TEX_COLOR_NORMAL);
 			for (GeoBone group : model.topLevelBones) {
 				transparentBones = renderRecursively(builder, group, red, green, blue, alpha, transparentBones);
 			}
@@ -97,7 +93,7 @@ public interface IGeoRenderer<T> {
 				transparentBones.sort((a, b) -> Float.compare(b.distanceSq, a.distanceSq));
 
 				GlStateManager.depthMask(false);
-				builder.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_COLOR_NORMAL);
+				builder.begin(GL11C.GL_QUADS, DefaultVertexFormats.POSITION_TEX_COLOR_NORMAL);
 				for (TransparentBone transparentBone : transparentBones) {
 					submitTransparentBone(builder, transparentBone, red, green, blue);
 				}
@@ -197,22 +193,14 @@ public interface IGeoRenderer<T> {
 		return transparentBones;
 	}
 
-	/** Camera position in model space, from the inverted GL_MODELVIEW matrix. */
-	private Vector4f getCameraLocalPosition() {
-		CAMERA_BUFFER.clear();
-		GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, CAMERA_BUFFER);
-		CAMERA_BUFFER.flip();
-		CAMERA_BUFFER.get(CAMERA_GL_MATRIX);
-
-		// GL matrices are column-major; javax.vecmath expects row-major
-		CAMERA_MODELVIEW.set(new float[] { CAMERA_GL_MATRIX[0], CAMERA_GL_MATRIX[4], CAMERA_GL_MATRIX[8],
-				CAMERA_GL_MATRIX[12], CAMERA_GL_MATRIX[1], CAMERA_GL_MATRIX[5], CAMERA_GL_MATRIX[9], CAMERA_GL_MATRIX[13],
-				CAMERA_GL_MATRIX[2], CAMERA_GL_MATRIX[6], CAMERA_GL_MATRIX[10], CAMERA_GL_MATRIX[14], CAMERA_GL_MATRIX[3],
-				CAMERA_GL_MATRIX[7], CAMERA_GL_MATRIX[11], CAMERA_GL_MATRIX[15] });
-		CAMERA_MODELVIEW.invert();
-
+	/**
+	 * Camera position in model space, used for transparent-bone distance sorting.
+	 * The default is the model origin; renderers override with a model-specific
+	 * value. (GL matrix queries are unavailable under Cleanroom's GL context, so
+	 * this must be computed from known render data instead of glGetFloatv.)
+	 */
+	default Vector4f getCameraLocalPosition() {
 		CAMERA_POSITION.set(0, 0, 0, 1);
-		CAMERA_MODELVIEW.transform(CAMERA_POSITION);
 		return CAMERA_POSITION;
 	}
 

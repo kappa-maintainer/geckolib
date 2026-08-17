@@ -5,6 +5,8 @@ import java.nio.FloatBuffer;
 import java.util.Collections;
 import java.util.List;
 
+import javax.vecmath.Vector4f;
+
 import com.eliotlash.mclib.utils.Interpolations;
 import com.google.common.collect.Lists;
 
@@ -28,7 +30,8 @@ import net.minecraft.util.EnumFacing;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.text.TextFormatting;
-import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL11C;
+import software.bernie.geckolib3.util.LegacyGL;
 import software.bernie.geckolib3.core.IAnimatable;
 import software.bernie.geckolib3.core.IAnimatableModel;
 import software.bernie.geckolib3.core.controller.AnimationController;
@@ -62,8 +65,24 @@ public abstract class GeoEntityRenderer<T extends EntityLivingBase & IAnimatable
 		this.modelProvider = modelProvider;
 	}
 
+	// Last render's translation (relative to the camera), for transparent-bone sorting
+	private double lastX, lastY, lastZ;
+
+	/**
+	 * Camera position in model space for transparent-bone sorting. Translation
+	 * only (entity yaw/pitch rotation is ignored); close enough for distance
+	 * sorting since the error stays within the model's own scale.
+	 */
 	@Override
+	public Vector4f getCameraLocalPosition() {
+		CAMERA_POSITION.set((float) -this.lastX, (float) -this.lastY, (float) -this.lastZ, 1);
+		return CAMERA_POSITION;
+	}
+
 	public void doRender(T entity, double x, double y, double z, float entityYaw, float partialTicks) {
+		this.lastX = x;
+		this.lastY = y;
+		this.lastZ = z;
 		GlStateManager.pushMatrix();
 		GlStateManager.translate(x, y, z);
 		// TODO: entity.isPassenger() looks redundant here
@@ -395,28 +414,28 @@ public abstract class GeoEntityRenderer<T extends EntityLivingBase & IAnimatable
 		{
 			GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
 			GlStateManager.enableTexture2D();
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, GL11.GL_MODULATE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, OpenGlHelper.defaultTexUnit);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PRIMARY_COLOR);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11.GL_SRC_COLOR);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11.GL_SRC_COLOR);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11.GL_REPLACE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, OpenGlHelper.defaultTexUnit);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11.GL_SRC_ALPHA);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, LegacyGL.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, LegacyGL.GL_MODULATE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, OpenGlHelper.defaultTexUnit);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PRIMARY_COLOR);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11C.GL_SRC_COLOR);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11C.GL_SRC_COLOR);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11C.GL_REPLACE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, OpenGlHelper.defaultTexUnit);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11C.GL_SRC_ALPHA);
 			GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
 			GlStateManager.enableTexture2D();
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, OpenGlHelper.GL_INTERPOLATE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, OpenGlHelper.GL_CONSTANT);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PREVIOUS);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE2_RGB, OpenGlHelper.GL_CONSTANT);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11.GL_SRC_COLOR);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11.GL_SRC_COLOR);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND2_RGB, GL11.GL_SRC_ALPHA);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11.GL_REPLACE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, OpenGlHelper.GL_PREVIOUS);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11.GL_SRC_ALPHA);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, LegacyGL.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, OpenGlHelper.GL_INTERPOLATE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, OpenGlHelper.GL_CONSTANT);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PREVIOUS);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE2_RGB, OpenGlHelper.GL_CONSTANT);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11C.GL_SRC_COLOR);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11C.GL_SRC_COLOR);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND2_RGB, GL11C.GL_SRC_ALPHA);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11C.GL_REPLACE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, OpenGlHelper.GL_PREVIOUS);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11C.GL_SRC_ALPHA);
 			((Buffer)this.brightnessBuffer).position(0);
 
             this.brightnessBuffer.put(1.0F);
@@ -425,19 +444,19 @@ public abstract class GeoEntityRenderer<T extends EntityLivingBase & IAnimatable
             this.brightnessBuffer.put(0.3F);
 
             ((Buffer)this.brightnessBuffer).flip();
-			GlStateManager.glTexEnv(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_COLOR, this.brightnessBuffer);
+			GlStateManager.glTexEnv(LegacyGL.GL_TEXTURE_ENV, LegacyGL.GL_TEXTURE_ENV_COLOR, this.brightnessBuffer);
 			GlStateManager.setActiveTexture(OpenGlHelper.GL_TEXTURE2);
 			GlStateManager.enableTexture2D();
 			GlStateManager.bindTexture(TEXTURE_BRIGHTNESS.getGlTextureId());
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, GL11.GL_MODULATE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, OpenGlHelper.GL_PREVIOUS);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.lightmapTexUnit);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11.GL_SRC_COLOR);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11.GL_SRC_COLOR);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11.GL_REPLACE);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, OpenGlHelper.GL_PREVIOUS);
-			GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11.GL_SRC_ALPHA);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, LegacyGL.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, LegacyGL.GL_MODULATE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, OpenGlHelper.GL_PREVIOUS);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.lightmapTexUnit);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11C.GL_SRC_COLOR);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11C.GL_SRC_COLOR);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11C.GL_REPLACE);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, OpenGlHelper.GL_PREVIOUS);
+			GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11C.GL_SRC_ALPHA);
 			GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
 			return true;
 		}
@@ -447,40 +466,40 @@ public abstract class GeoEntityRenderer<T extends EntityLivingBase & IAnimatable
 	{
 		GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
 		GlStateManager.enableTexture2D();
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, GL11.GL_MODULATE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, OpenGlHelper.defaultTexUnit);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PRIMARY_COLOR);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11.GL_SRC_COLOR);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11.GL_SRC_COLOR);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11.GL_MODULATE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, OpenGlHelper.defaultTexUnit);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_ALPHA, OpenGlHelper.GL_PRIMARY_COLOR);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11.GL_SRC_ALPHA);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_ALPHA, GL11.GL_SRC_ALPHA);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, LegacyGL.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, LegacyGL.GL_MODULATE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, OpenGlHelper.defaultTexUnit);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PRIMARY_COLOR);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11C.GL_SRC_COLOR);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11C.GL_SRC_COLOR);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, LegacyGL.GL_MODULATE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, OpenGlHelper.defaultTexUnit);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_ALPHA, OpenGlHelper.GL_PRIMARY_COLOR);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11C.GL_SRC_ALPHA);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_ALPHA, GL11C.GL_SRC_ALPHA);
 		GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, GL11.GL_MODULATE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11.GL_SRC_COLOR);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11.GL_SRC_COLOR);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, GL11.GL_TEXTURE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PREVIOUS);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11.GL_MODULATE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11.GL_SRC_ALPHA);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, GL11.GL_TEXTURE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, LegacyGL.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, LegacyGL.GL_MODULATE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11C.GL_SRC_COLOR);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11C.GL_SRC_COLOR);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, GL11C.GL_TEXTURE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PREVIOUS);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, LegacyGL.GL_MODULATE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11C.GL_SRC_ALPHA);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, GL11C.GL_TEXTURE);
 		GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
 		GlStateManager.setActiveTexture(OpenGlHelper.GL_TEXTURE2);
 		GlStateManager.disableTexture2D();
 		GlStateManager.bindTexture(0);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, GL11.GL_MODULATE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11.GL_SRC_COLOR);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11.GL_SRC_COLOR);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, GL11.GL_TEXTURE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PREVIOUS);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, GL11.GL_MODULATE);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11.GL_SRC_ALPHA);
-		GlStateManager.glTexEnvi(GL11.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, GL11.GL_TEXTURE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, LegacyGL.GL_TEXTURE_ENV_MODE, OpenGlHelper.GL_COMBINE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_RGB, LegacyGL.GL_MODULATE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_RGB, GL11C.GL_SRC_COLOR);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND1_RGB, GL11C.GL_SRC_COLOR);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_RGB, GL11C.GL_TEXTURE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE1_RGB, OpenGlHelper.GL_PREVIOUS);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_COMBINE_ALPHA, LegacyGL.GL_MODULATE);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_OPERAND0_ALPHA, GL11C.GL_SRC_ALPHA);
+		GlStateManager.glTexEnvi(LegacyGL.GL_TEXTURE_ENV, OpenGlHelper.GL_SOURCE0_ALPHA, GL11C.GL_TEXTURE);
 		GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
 	}
 }

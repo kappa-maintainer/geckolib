@@ -1,6 +1,7 @@
 package software.bernie.geckolib3.renderers.geo;
 
-import org.lwjgl.opengl.GL11;
+
+import javax.vecmath.Vector4f;
 
 import net.minecraft.block.BlockDirectional;
 import net.minecraft.block.BlockHorizontal;
@@ -38,6 +39,11 @@ public abstract class GeoBlockRenderer<T extends TileEntity & IAnimatable> exten
 
 	private final AnimatedGeoModel<T> modelProvider;
 
+	// Last render's translation (relative to the camera) and facing; used to
+	// compute the camera position in model space for transparent-bone sorting
+	private double lastX, lastY, lastZ;
+	private EnumFacing lastFacing;
+
 	public GeoBlockRenderer(AnimatedGeoModel<T> modelProvider) {
 		this.modelProvider = modelProvider;
 	}
@@ -63,6 +69,11 @@ public abstract class GeoBlockRenderer<T extends TileEntity & IAnimatable> exten
 		OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, lx, ly);
 		GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
 
+		this.lastX = x;
+		this.lastY = y;
+		this.lastZ = z;
+		this.lastFacing = getFacing(tile);
+
 		GlStateManager.pushMatrix();
 		GlStateManager.translate(x, y, z);
 		GlStateManager.translate(0, 0.01f, 0);
@@ -75,6 +86,52 @@ public abstract class GeoBlockRenderer<T extends TileEntity & IAnimatable> exten
 		render(model, tile, partialTicks, (float) renderColor.getRed() / 255f, (float) renderColor.getGreen() / 255f,
 				(float) renderColor.getBlue() / 255f, (float) renderColor.getAlpha() / 255);
 		GlStateManager.popMatrix();
+	}
+
+	@Override
+	public Vector4f getCameraLocalPosition() {
+		// M_model = T(x+0.5, y+0.01, z+0.5) * R(facing); the camera sits at the view
+		// origin, so camera-in-model-space = R^-1 * (-(x+0.5), -(y+0.01), -(z+0.5)),
+		// matching the translate/rotateBlock sequence in render()
+		float dx = (float) -(this.lastX + 0.5);
+		float dy = (float) -(this.lastY + 0.01);
+		float dz = (float) -(this.lastZ + 0.5);
+		float radY = 0.0F;
+		float radX = 0.0F;
+		switch (this.lastFacing) {
+		case SOUTH:
+			radY = (float) Math.PI;
+			break;
+		case WEST:
+			radY = (float) (Math.PI / 2);
+			break;
+		case EAST:
+			radY = (float) (3 * Math.PI / 2);
+			break;
+		case UP:
+			radX = (float) (Math.PI / 2);
+			break;
+		case DOWN:
+			radX = (float) (-Math.PI / 2);
+			break;
+		default:
+			break; // NORTH: no rotation
+		}
+		if (radY != 0.0F) {
+			float cos = (float) Math.cos(radY);
+			float sin = (float) Math.sin(radY);
+			float x2 = dx * cos - dz * sin;
+			dz = dx * sin + dz * cos;
+			dx = x2;
+		} else if (radX != 0.0F) {
+			float cos = (float) Math.cos(radX);
+			float sin = (float) Math.sin(radX);
+			float y2 = dy * cos + dz * sin;
+			dz = -dy * sin + dz * cos;
+			dy = y2;
+		}
+		CAMERA_POSITION.set(dx, dy, dz, 1);
+		return CAMERA_POSITION;
 	}
 
 	@Override

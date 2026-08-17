@@ -4,8 +4,6 @@ import javax.vecmath.Matrix3f;
 import javax.vecmath.Matrix4f;
 import javax.vecmath.Vector3f;
 
-import org.lwjgl.util.vector.Quaternion;
-
 import software.bernie.geckolib3.geo.render.built.GeoBone;
 import software.bernie.geckolib3.geo.render.built.GeoCube;
 
@@ -217,22 +215,5 @@ public class MatrixStack {
 
 		this.model[this.depth].mul(this.tempModelMatrix);
 		this.normal[this.depth].mul(this.tempNormalMatrix);
-	}
-
-	@SuppressWarnings("unused")
-	private Quaternion fromAngles(float x, float y, float z) {
-		float sx = (float) Math.sin(0.5F * x);
-		float cx = (float) Math.cos(0.5F * x);
-		float sy = (float) Math.sin(0.5F * y);
-		float cy = (float) Math.cos(0.5F * y);
-		float sz = (float) Math.sin(0.5F * z);
-		float cz = (float) Math.cos(0.5F * z);
-
-		float ox = sx * cy * cz + cx * sy * sz;
-		float oy = cx * sy * cz - sx * cy * sz;
-		float oz = sx * sy * cz + cx * cy * sz;
-		float ow = cx * cy * cz - sx * sy * sz;
-
-		return new Quaternion(ox, oy, oz, ow);
 	}
 }
