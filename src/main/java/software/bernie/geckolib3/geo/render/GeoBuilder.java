@@ -37,7 +37,20 @@ public class GeoBuilder implements IGeoBuilder {
 		for (RawBoneGroup rawBone : geometryTree.topLevelBones.values()) {
 			model.topLevelBones.add(this.constructBone(rawBone, geometryTree.properties, null));
 		}
+		// Bake cube vertices into compact streams once at load time (see GeoCube.bake)
+		for (GeoBone bone : model.topLevelBones) {
+			bakeCubes(bone);
+		}
 		return model;
+	}
+
+	private static void bakeCubes(GeoBone bone) {
+		for (GeoCube cube : bone.childCubes) {
+			cube.bake();
+		}
+		for (GeoBone childBone : bone.childBones) {
+			bakeCubes(childBone);
+		}
 	}
 
 	@Override

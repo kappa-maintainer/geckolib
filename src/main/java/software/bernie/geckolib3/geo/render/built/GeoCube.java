@@ -13,6 +13,12 @@ import software.bernie.geckolib3.util.VectorUtils;
 
 public class GeoCube {
 	public GeoQuad[] quads = new GeoQuad[6];
+	/**
+	 * Baked interleaved vertex stream: [x,y,z,u,v,nx,ny,nz] per vertex,
+	 * 4 vertices per quad. Set once at model load by {@link #bake()}; null for
+	 * cubes created outside GeoBuilder (renderCube falls back to quads).
+	 */
+	public float[] baked;
 	public Vector3f pivot;
 	public Vector3f rotation;
 	public Vector3f size = new Vector3f();
@@ -218,5 +224,47 @@ public class GeoCube {
 		cube.quads[4] = quadUp;
 		cube.quads[5] = quadDown;
 		return cube;
+	}
+
+	/**
+	 * Bakes the quads into a compact interleaved float array for fast rendering:
+	 * [x,y,z,u,v,nx,ny,nz] per vertex, 4 vertices per quad (32 floats/quad). Also
+	 * applies the flat-cube normal fix that renderCube used to do every frame.
+	 * Called once at model load; quads are kept for compatibility.
+	 */
+	public void bake() {
+		int vertexCount = 0;
+		for (GeoQuad quad : this.quads) {
+			vertexCount += quad.vertices.length;
+		}
+		float[] data = new float[vertexCount * 8];
+		int i = 0;
+		for (GeoQuad quad : this.quads) {
+			// Flat-cube dark-shading fix (was applied per frame in renderCube):
+			// mirror negative normals on zero-size axes
+			float nx = quad.normal.getX();
+			float ny = quad.normal.getY();
+			float nz = quad.normal.getZ();
+			if ((this.size.y == 0 || this.size.z == 0) && nx < 0) {
+				nx *= -1;
+			}
+			if ((this.size.x == 0 || this.size.z == 0) && ny < 0) {
+				ny *= -1;
+			}
+			if ((this.size.x == 0 || this.size.y == 0) && nz < 0) {
+				nz *= -1;
+			}
+			for (GeoVertex vertex : quad.vertices) {
+				data[i++] = vertex.position.getX();
+				data[i++] = vertex.position.getY();
+				data[i++] = vertex.position.getZ();
+				data[i++] = vertex.textureU;
+				data[i++] = vertex.textureV;
+				data[i++] = nx;
+				data[i++] = ny;
+				data[i++] = nz;
+			}
+		}
+		this.baked = data;
 	}
 }

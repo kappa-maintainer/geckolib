@@ -289,6 +289,14 @@ public interface IGeoRenderer<T> {
 		MATRIX_STACK.rotate(cube);
 		MATRIX_STACK.moveBackFromPivot(cube);
 
+		float[] baked = cube.baked;
+		if (baked != null) {
+			renderBakedCube(builder, baked, MATRIX_STACK.getModelMatrix(), MATRIX_STACK.getNormalMatrix(), red, green,
+					blue, alpha);
+			return;
+		}
+
+		// Legacy path: cubes not baked (e.g. created outside GeoBuilder)
 		for (GeoQuad quad : cube.quads) {
 			TEMP_NORMAL.set(quad.normal.getX(), quad.normal.getY(), quad.normal.getZ());
 			MATRIX_STACK.getNormalMatrix().transform(TEMP_NORMAL);
@@ -311,6 +319,41 @@ public interface IGeoRenderer<T> {
 				builder.pos(TEMP_VERTEX.getX(), TEMP_VERTEX.getY(), TEMP_VERTEX.getZ())
 						.tex(vertex.textureU, vertex.textureV).color(red, green, blue, alpha)
 						.normal(TEMP_NORMAL.getX(), TEMP_NORMAL.getY(), TEMP_NORMAL.getZ()).endVertex();
+			}
+		}
+	}
+
+	/**
+	 * Fast path: submits a baked cube's interleaved vertex stream
+	 * ([x,y,z,u,v,nx,ny,nz] per vertex, 4 vertices per quad) with hand-inlined
+	 * matrix transforms. Normals are already flat-cube-fixed at bake time.
+	 */
+	default void renderBakedCube(BufferBuilder builder, float[] baked, Matrix4f model, Matrix3f normal, float red,
+			float green, float blue, float alpha) {
+		float m00 = model.m00, m01 = model.m01, m02 = model.m02, m03 = model.m03;
+		float m10 = model.m10, m11 = model.m11, m12 = model.m12, m13 = model.m13;
+		float m20 = model.m20, m21 = model.m21, m22 = model.m22, m23 = model.m23;
+		float n00 = normal.m00, n01 = normal.m01, n02 = normal.m02;
+		float n10 = normal.m10, n11 = normal.m11, n12 = normal.m12;
+		float n20 = normal.m20, n21 = normal.m21, n22 = normal.m22;
+
+		for (int i = 0; i < baked.length; i += 32) {
+			// Quad normal (already flat-cube-fixed) transformed by the 3x3 normal matrix
+			float nx = baked[i + 5];
+			float ny = baked[i + 6];
+			float nz = baked[i + 7];
+			float tnx = n00 * nx + n01 * ny + n02 * nz;
+			float tny = n10 * nx + n11 * ny + n12 * nz;
+			float tnz = n20 * nx + n21 * ny + n22 * nz;
+
+			for (int v = 0; v < 4; v++) {
+				int o = i + v * 8;
+				float x = baked[o];
+				float y = baked[o + 1];
+				float z = baked[o + 2];
+				builder.pos(m00 * x + m01 * y + m02 * z + m03, m10 * x + m11 * y + m12 * z + m13,
+						m20 * x + m21 * y + m22 * z + m23).tex(baked[o + 3], baked[o + 4])
+						.color(red, green, blue, alpha).normal(tnx, tny, tnz).endVertex();
 			}
 		}
 	}
