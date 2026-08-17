@@ -1,5 +1,6 @@
 package software.bernie.geckolib3.renderers.geo;
 
+import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -9,6 +10,7 @@ import javax.vecmath.Matrix4f;
 import javax.vecmath.Vector3f;
 import javax.vecmath.Vector4f;
 
+import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 
 import net.minecraft.client.renderer.BufferBuilder;
@@ -24,6 +26,7 @@ import software.bernie.geckolib3.geo.render.built.GeoQuad;
 import software.bernie.geckolib3.geo.render.built.GeoVertex;
 import software.bernie.geckolib3.model.provider.GeoModelProvider;
 import software.bernie.geckolib3.util.MatrixStack;
+import software.bernie.geckolib3.util.TextureAlphaDetector;
 
 public interface IGeoRenderer<T> {
 	MatrixStack MATRIX_STACK = new MatrixStack();
@@ -36,8 +39,14 @@ public interface IGeoRenderer<T> {
 
 		renderLate(animatable, partialTicks, red, green, blue, alpha);
 
-		GlStateManager.enableBlend();
-		GlStateManager.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
+		// Textures with an alpha channel are cutout-rendered: alpha-tested (transparent
+		// pixels don't write depth) while opaque pixels keep writing depth, so the model
+		// still occludes things behind it correctly
+		boolean textureHasAlpha = TextureAlphaDetector.hasAlpha(getTextureLocation(animatable));
+		if (textureHasAlpha) {
+			GlStateManager.enableAlpha();
+			GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+		}
 		BufferBuilder builder = Tessellator.getInstance().getBuffer();
 
 		// Single traversal: opaque bones are submitted immediately, transparent bones are deferred
@@ -49,8 +58,20 @@ public interface IGeoRenderer<T> {
 		}
 		Tessellator.getInstance().draw();
 
-		// Pass 2: submit deferred transparent bones without depth writing so they don't occlude
+		// Pass 2: submit deferred transparent bones without depth writing so they don't occlude.
+		// Bones are sorted far-to-near by camera distance in model space for correct blending.
 		if (transparentBones != null) {
+			GlStateManager.enableBlend();
+			GlStateManager.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
+			Vector4f cameraLocal = getCameraLocalPosition();
+			for (TransparentBone transparentBone : transparentBones) {
+				float dx = transparentBone.boneX - cameraLocal.x;
+				float dy = transparentBone.boneY - cameraLocal.y;
+				float dz = transparentBone.boneZ - cameraLocal.z;
+				transparentBone.distanceSq = dx * dx + dy * dy + dz * dz;
+			}
+			transparentBones.sort((a, b) -> Float.compare(b.distanceSq, a.distanceSq));
+
 			GlStateManager.depthMask(false);
 			builder.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_COLOR_NORMAL);
 			for (TransparentBone transparentBone : transparentBones) {
@@ -58,9 +79,12 @@ public interface IGeoRenderer<T> {
 			}
 			Tessellator.getInstance().draw();
 			GlStateManager.depthMask(true);
+			GlStateManager.disableBlend();
 		}
 
-		GlStateManager.disableBlend();
+		if (textureHasAlpha) {
+			GlStateManager.disableAlpha();
+		}
 		renderAfter(animatable, partialTicks, red, green, blue, alpha);
 		GlStateManager.disableRescaleNormal();
 	}
@@ -103,6 +127,11 @@ public interface IGeoRenderer<T> {
 
 		MATRIX_STACK.push();
 
+		// Snapshot the parent-chain matrices before applying this bone's own transform,
+		// so deferred submission re-applies the transform uniformly (see submitBoneTree)
+		Matrix4f parentModel = boneAlpha < 1 ? new Matrix4f(MATRIX_STACK.getModelMatrix()) : null;
+		Matrix3f parentNormal = boneAlpha < 1 ? new Matrix3f(MATRIX_STACK.getNormalMatrix()) : null;
+
 		MATRIX_STACK.translate(bone);
 		MATRIX_STACK.moveToPivot(bone);
 		MATRIX_STACK.rotate(bone);
@@ -114,8 +143,12 @@ public interface IGeoRenderer<T> {
 			if (transparentBones == null) {
 				transparentBones = new ArrayList<>(4);
 			}
-			transparentBones.add(new TransparentBone(bone, new Matrix4f(MATRIX_STACK.getModelMatrix()),
-					new Matrix3f(MATRIX_STACK.getNormalMatrix()), alpha));
+			// Model-space position of the bone's pivot, used as the sort reference point
+			Vector3f bonePos = new Vector3f(bone.rotationPointX / 16, bone.rotationPointY / 16,
+					bone.rotationPointZ / 16);
+			MATRIX_STACK.getModelMatrix().transform(bonePos);
+			transparentBones.add(new TransparentBone(bone, parentModel, parentNormal, alpha, bonePos.x, bonePos.y,
+					bonePos.z));
 		} else {
 			if (!bone.isHidden()) {
 				for (GeoCube cube : bone.childCubes) {
@@ -139,6 +172,28 @@ public interface IGeoRenderer<T> {
 	}
 
 	/**
+	 * Computes the camera position in model space by inverting the current
+	 * GL_MODELVIEW matrix (which maps model space to camera space) and
+	 * transforming the camera origin (0,0,0).
+	 */
+	private Vector4f getCameraLocalPosition() {
+		FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
+		GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, buffer);
+		float[] gl = new float[16];
+		buffer.get(gl);
+
+		// GL matrices are column-major; javax.vecmath expects row-major
+		Matrix4f modelview = new Matrix4f();
+		modelview.set(new float[] { gl[0], gl[4], gl[8], gl[12], gl[1], gl[5], gl[9], gl[13], gl[2], gl[6], gl[10],
+				gl[14], gl[3], gl[7], gl[11], gl[15] });
+		modelview.invert();
+
+		Vector4f cameraLocal = new Vector4f(0, 0, 0, 1);
+		modelview.transform(cameraLocal);
+		return cameraLocal;
+	}
+
+	/**
 	 * Submits a deferred transparent bone: restores its matrix snapshot and draws
 	 * its entire subtree with the accumulated alpha.
 	 */
@@ -157,6 +212,15 @@ public interface IGeoRenderer<T> {
 		if (boneAlpha <= 0) {
 			return;
 		}
+
+		MATRIX_STACK.push();
+
+		MATRIX_STACK.translate(bone);
+		MATRIX_STACK.moveToPivot(bone);
+		MATRIX_STACK.rotate(bone);
+		MATRIX_STACK.scale(bone);
+		MATRIX_STACK.moveBackFromPivot(bone);
+
 		if (!bone.isHidden()) {
 			for (GeoCube cube : bone.childCubes) {
 				MATRIX_STACK.push();
@@ -171,6 +235,8 @@ public interface IGeoRenderer<T> {
 				submitBoneTree(builder, childBone, red, green, blue, boneAlpha);
 			}
 		}
+
+		MATRIX_STACK.pop();
 	}
 
 	/**
@@ -182,12 +248,20 @@ public interface IGeoRenderer<T> {
 		final Matrix4f model;
 		final Matrix3f normal;
 		final float alpha;
+		final float boneX;
+		final float boneY;
+		final float boneZ;
+		float distanceSq;
 
-		TransparentBone(GeoBone bone, Matrix4f model, Matrix3f normal, float alpha) {
+		TransparentBone(GeoBone bone, Matrix4f model, Matrix3f normal, float alpha, float boneX, float boneY,
+				float boneZ) {
 			this.bone = bone;
 			this.model = model;
 			this.normal = normal;
 			this.alpha = alpha;
+			this.boneX = boneX;
+			this.boneY = boneY;
+			this.boneZ = boneZ;
 		}
 	}
 
