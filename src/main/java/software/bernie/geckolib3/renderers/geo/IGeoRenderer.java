@@ -32,6 +32,16 @@ import software.bernie.geckolib3.util.TextureAlphaDetector;
 public interface IGeoRenderer<T> {
 	MatrixStack MATRIX_STACK = new MatrixStack();
 
+	// Reusable temporaries for the render pipeline (single-threaded main-thread
+	// rendering). Do not retain them across calls.
+	Vector3f TEMP_NORMAL = new Vector3f();
+	Vector4f TEMP_VERTEX = new Vector4f();
+	Vector3f TEMP_BONE_POS = new Vector3f();
+	FloatBuffer CAMERA_BUFFER = BufferUtils.createFloatBuffer(16);
+	float[] CAMERA_GL_MATRIX = new float[16];
+	Matrix4f CAMERA_MODELVIEW = new Matrix4f();
+	Vector4f CAMERA_POSITION = new Vector4f();
+
 	default void render(GeoModel model, T animatable, float partialTicks, float red, float green, float blue,
 			float alpha) {
 		//GlStateManager.enableCull();
@@ -94,6 +104,11 @@ public interface IGeoRenderer<T> {
 				Tessellator.getInstance().draw();
 				GlStateManager.depthMask(true);
 				GlStateManager.disableBlend();
+
+				// Return deferred entries (and their matrix snapshots) to the pool
+				for (TransparentBone transparentBone : transparentBones) {
+					TransparentBone.release(transparentBone);
+				}
 			}
 
 			if (textureHasAlpha) {
@@ -137,9 +152,10 @@ public interface IGeoRenderer<T> {
 
 		MATRIX_STACK.push();
 
-		// Snapshot parent-chain matrices so deferred submission re-applies the bone transform
-		Matrix4f parentModel = boneAlpha < 1 ? new Matrix4f(MATRIX_STACK.getModelMatrix()) : null;
-		Matrix3f parentNormal = boneAlpha < 1 ? new Matrix3f(MATRIX_STACK.getNormalMatrix()) : null;
+		// Snapshot parent-chain matrices (for deferred submission) before applying this bone's transform
+		TransparentBone entry = boneAlpha < 1
+				? TransparentBone.acquire(bone, MATRIX_STACK.getModelMatrix(), MATRIX_STACK.getNormalMatrix(), alpha)
+				: null;
 
 		MATRIX_STACK.translate(bone);
 		MATRIX_STACK.moveToPivot(bone);
@@ -153,11 +169,12 @@ public interface IGeoRenderer<T> {
 				transparentBones = new ArrayList<>(4);
 			}
 			// Model-space position of the bone's pivot, used as the sort reference point
-			Vector3f bonePos = new Vector3f(bone.rotationPointX / 16, bone.rotationPointY / 16,
-					bone.rotationPointZ / 16);
-			MATRIX_STACK.getModelMatrix().transform(bonePos);
-			transparentBones.add(new TransparentBone(bone, parentModel, parentNormal, alpha, bonePos.x, bonePos.y,
-					bonePos.z));
+			TEMP_BONE_POS.set(bone.rotationPointX / 16, bone.rotationPointY / 16, bone.rotationPointZ / 16);
+			MATRIX_STACK.getModelMatrix().transform(TEMP_BONE_POS);
+			entry.boneX = TEMP_BONE_POS.x;
+			entry.boneY = TEMP_BONE_POS.y;
+			entry.boneZ = TEMP_BONE_POS.z;
+			transparentBones.add(entry);
 		} else {
 			if (!bone.isHidden()) {
 				for (GeoCube cube : bone.childCubes) {
@@ -182,20 +199,21 @@ public interface IGeoRenderer<T> {
 
 	/** Camera position in model space, from the inverted GL_MODELVIEW matrix. */
 	private Vector4f getCameraLocalPosition() {
-		FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
-		GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, buffer);
-		float[] gl = new float[16];
-		buffer.get(gl);
+		CAMERA_BUFFER.clear();
+		GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, CAMERA_BUFFER);
+		CAMERA_BUFFER.flip();
+		CAMERA_BUFFER.get(CAMERA_GL_MATRIX);
 
 		// GL matrices are column-major; javax.vecmath expects row-major
-		Matrix4f modelview = new Matrix4f();
-		modelview.set(new float[] { gl[0], gl[4], gl[8], gl[12], gl[1], gl[5], gl[9], gl[13], gl[2], gl[6], gl[10],
-				gl[14], gl[3], gl[7], gl[11], gl[15] });
-		modelview.invert();
+		CAMERA_MODELVIEW.set(new float[] { CAMERA_GL_MATRIX[0], CAMERA_GL_MATRIX[4], CAMERA_GL_MATRIX[8],
+				CAMERA_GL_MATRIX[12], CAMERA_GL_MATRIX[1], CAMERA_GL_MATRIX[5], CAMERA_GL_MATRIX[9], CAMERA_GL_MATRIX[13],
+				CAMERA_GL_MATRIX[2], CAMERA_GL_MATRIX[6], CAMERA_GL_MATRIX[10], CAMERA_GL_MATRIX[14], CAMERA_GL_MATRIX[3],
+				CAMERA_GL_MATRIX[7], CAMERA_GL_MATRIX[11], CAMERA_GL_MATRIX[15] });
+		CAMERA_MODELVIEW.invert();
 
-		Vector4f cameraLocal = new Vector4f(0, 0, 0, 1);
-		modelview.transform(cameraLocal);
-		return cameraLocal;
+		CAMERA_POSITION.set(0, 0, 0, 1);
+		CAMERA_MODELVIEW.transform(CAMERA_POSITION);
+		return CAMERA_POSITION;
 	}
 
 	/** Restores a deferred bone's matrix snapshot and submits its subtree. */
@@ -243,24 +261,38 @@ public interface IGeoRenderer<T> {
 
 	/** Deferred transparent bone: bone, matrix snapshot, parent alpha, pivot position. */
 	final class TransparentBone {
-		final GeoBone bone;
-		final Matrix4f model;
-		final Matrix3f normal;
-		final float alpha;
-		final float boneX;
-		final float boneY;
-		final float boneZ;
+		private static final List<TransparentBone> POOL = new ArrayList<>(16);
+		private static final int MAX_POOL_SIZE = 64;
+
+		GeoBone bone;
+		Matrix4f model;
+		Matrix3f normal;
+		float alpha;
+		float boneX;
+		float boneY;
+		float boneZ;
 		float distanceSq;
 
-		TransparentBone(GeoBone bone, Matrix4f model, Matrix3f normal, float alpha, float boneX, float boneY,
-				float boneZ) {
-			this.bone = bone;
-			this.model = model;
-			this.normal = normal;
-			this.alpha = alpha;
-			this.boneX = boneX;
-			this.boneY = boneY;
-			this.boneZ = boneZ;
+		private TransparentBone() {
+			this.model = new Matrix4f();
+			this.normal = new Matrix3f();
+		}
+
+		/** Copies the parent-chain matrices into a (possibly pooled) entry. */
+		static TransparentBone acquire(GeoBone bone, Matrix4f parentModel, Matrix3f parentNormal, float alpha) {
+			TransparentBone entry = POOL.isEmpty() ? new TransparentBone() : POOL.remove(POOL.size() - 1);
+			entry.bone = bone;
+			entry.model.set(parentModel);
+			entry.normal.set(parentNormal);
+			entry.alpha = alpha;
+			return entry;
+		}
+
+		/** Returns the entry (and its matrix snapshots) to the pool. */
+		static void release(TransparentBone entry) {
+			if (POOL.size() < MAX_POOL_SIZE) {
+				POOL.add(entry);
+			}
 		}
 	}
 
@@ -270,29 +302,27 @@ public interface IGeoRenderer<T> {
 		MATRIX_STACK.moveBackFromPivot(cube);
 
 		for (GeoQuad quad : cube.quads) {
-			Vector3f normal = new Vector3f(quad.normal.getX(), quad.normal.getY(), quad.normal.getZ());
-
-			MATRIX_STACK.getNormalMatrix().transform(normal);
+			TEMP_NORMAL.set(quad.normal.getX(), quad.normal.getY(), quad.normal.getZ());
+			MATRIX_STACK.getNormalMatrix().transform(TEMP_NORMAL);
 
 			// Fix flat-cube dark shading + Optifine shader compatibility
-			if ((cube.size.y == 0 || cube.size.z == 0) && normal.getX() < 0) {
-				normal.x *= -1;
+			if ((cube.size.y == 0 || cube.size.z == 0) && TEMP_NORMAL.getX() < 0) {
+				TEMP_NORMAL.x *= -1;
 			}
-			if ((cube.size.x == 0 || cube.size.z == 0) && normal.getY() < 0) {
-				normal.y *= -1;
+			if ((cube.size.x == 0 || cube.size.z == 0) && TEMP_NORMAL.getY() < 0) {
+				TEMP_NORMAL.y *= -1;
 			}
-			if ((cube.size.x == 0 || cube.size.y == 0) && normal.getZ() < 0) {
-				normal.z *= -1;
+			if ((cube.size.x == 0 || cube.size.y == 0) && TEMP_NORMAL.getZ() < 0) {
+				TEMP_NORMAL.z *= -1;
 			}
 
 			for (GeoVertex vertex : quad.vertices) {
-				Vector4f vector4f = new Vector4f(vertex.position.getX(), vertex.position.getY(), vertex.position.getZ(),
-						1.0F);
+				TEMP_VERTEX.set(vertex.position.getX(), vertex.position.getY(), vertex.position.getZ(), 1.0F);
+				MATRIX_STACK.getModelMatrix().transform(TEMP_VERTEX);
 
-				MATRIX_STACK.getModelMatrix().transform(vector4f);
-
-				builder.pos(vector4f.getX(), vector4f.getY(), vector4f.getZ()).tex(vertex.textureU, vertex.textureV)
-						.color(red, green, blue, alpha).normal(normal.getX(), normal.getY(), normal.getZ()).endVertex();
+				builder.pos(TEMP_VERTEX.getX(), TEMP_VERTEX.getY(), TEMP_VERTEX.getZ())
+						.tex(vertex.textureU, vertex.textureV).color(red, green, blue, alpha)
+						.normal(TEMP_NORMAL.getX(), TEMP_NORMAL.getY(), TEMP_NORMAL.getZ()).endVertex();
 			}
 		}
 	}
